@@ -86,8 +86,8 @@ async def dashboard_view(request: Request, db: Session = Depends(get_db)):
             })
 
     # Weight history for chart & table
-    weight_logs = db.query(WeightLog).order_by(WeightLog.date.asc()).all()
-    weights_data = [{"date": w.date.strftime("%b %d"), "weight": w.weight_kg} for w in weight_logs]
+    weight_logs = db.query(WeightLog).order_by(WeightLog.date.asc(), WeightLog.id.asc()).all()
+    weights_data = [{"id": w.id, "date": w.date.strftime("%b %d"), "weight": w.weight_kg} for w in weight_logs]
 
     return templates.TemplateResponse(
         request=request,
@@ -110,11 +110,27 @@ class WeightInput(BaseModel):
 async def log_weight_api(data: WeightInput, db: Session = Depends(get_db)):
     if data.weight_kg < 40 or data.weight_kg > 250:
         raise HTTPException(status_code=400, detail="Invalid weight value.")
-    w_entry = WeightLog(date=date.today(), weight_kg=round(data.weight_kg, 1))
-    db.add(w_entry)
+    today = date.today()
+    existing_today = db.query(WeightLog).filter(WeightLog.date == today).order_by(WeightLog.id.desc()).first()
+    if existing_today:
+        existing_today.weight_kg = round(data.weight_kg, 1)
+        w_entry = existing_today
+    else:
+        w_entry = WeightLog(date=today, weight_kg=round(data.weight_kg, 1))
+        db.add(w_entry)
     db.commit()
     stats = get_user_stats(db)
     return {"status": "success", "weight": w_entry.weight_kg, "stats": stats}
+
+@app.delete("/api/weight/{weight_id}")
+async def delete_weight_api(weight_id: int, db: Session = Depends(get_db)):
+    w = db.query(WeightLog).filter(WeightLog.id == weight_id).first()
+    if not w:
+        raise HTTPException(status_code=404, detail="Weight entry not found")
+    db.delete(w)
+    db.commit()
+    stats = get_user_stats(db)
+    return {"status": "deleted", "id": weight_id, "stats": stats}
 
 class ManualMealInput(BaseModel):
     text: str

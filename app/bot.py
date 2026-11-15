@@ -80,22 +80,27 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = date.today()
     db = SessionLocal()
     try:
+        user_state = get_user_state(db)
+        budget = user_state["budget"]
         meals = db.query(MealLog).filter(MealLog.date == today).order_by(MealLog.created_at.asc()).all()
         if not meals:
             await update.message.reply_text(
                 f"ℹ️ No meals logged yet for today ({today.strftime('%d %b')}).\n"
-                f"Send me your breakfast or snack to get started! Budget: *{settings.DAILY_CALORIE_BUDGET} kcal*",
+                f"⚖️ Current Weight: *{user_state['weight']} kg* ({user_state['to_lose']} kg to 70kg)\n"
+                f"🎯 Daily Budget: *{budget} kcal*\n"
+                f"Send me your breakfast or snack to get started!",
                 parse_mode=ParseMode.MARKDOWN
             )
             return
 
         total_cals = sum(m.total_calories for m in meals)
-        remaining = settings.DAILY_CALORIE_BUDGET - total_cals
+        remaining = budget - total_cals
         status_word = f"🟢 {remaining} kcal remaining" if remaining >= 0 else f"🔴 {abs(remaining)} kcal over budget"
 
         lines = [
             f"📊 *Today's Status ({today.strftime('%d %b')}):*\n",
-            f"🎯 Budget: *{settings.DAILY_CALORIE_BUDGET} kcal*",
+            f"⚖️ Current Weight: *{user_state['weight']} kg* (Target: 70 kg)",
+            f"🎯 Daily Budget: *{budget} kcal*",
             f"🔥 Consumed: *{total_cals} kcal*",
             f"⚖️ Status: *{status_word}*\n",
             "*Logged Meals:*"
@@ -134,26 +139,44 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
+def get_user_state(db):
+    """Calculates active weight, BMR deficit budget, and distance to 70kg goal."""
+    latest_w = db.query(WeightLog).order_by(WeightLog.date.desc(), WeightLog.id.desc()).first()
+    curr_w = latest_w.weight_kg if latest_w else settings.USER_CURRENT_WEIGHT_KG
+    budget = calculate_budget_for_weight(curr_w, settings.USER_HEIGHT_CM, settings.USER_AGE, settings.USER_GENDER)
+    to_lose = round(max(0.0, curr_w - settings.USER_TARGET_WEIGHT_KG), 1)
+    lost = round(max(0.0, settings.USER_CURRENT_WEIGHT_KG - curr_w), 1)
+    return {
+        "weight": curr_w,
+        "budget": budget,
+        "to_lose": to_lose,
+        "lost": lost,
+    }
+
 async def log_weight_logic(weight_val: float, update: Update):
     today = date.today()
     db = SessionLocal()
     try:
-        w_entry = WeightLog(date=today, weight_kg=weight_val)
-        db.add(w_entry)
+        existing_today = db.query(WeightLog).filter(WeightLog.date == today).order_by(WeightLog.id.desc()).first()
+        if existing_today:
+            existing_today.weight_kg = weight_val
+        else:
+            db.add(WeightLog(date=today, weight_kg=weight_val))
         db.commit()
 
-        new_budget = calculate_budget_for_weight(weight_val, settings.USER_HEIGHT_CM, settings.USER_AGE, settings.USER_GENDER)
-        lost = round(settings.USER_CURRENT_WEIGHT_KG - weight_val, 1)
-        remaining_to_goal = round(max(0.0, weight_val - settings.USER_TARGET_WEIGHT_KG), 1)
+        user_state = get_user_state(db)
+        new_budget = user_state["budget"]
+        lost = user_state["lost"]
+        remaining_to_goal = user_state["to_lose"]
 
-        progress_str = f"📉 Total Lost: *{lost} kg* from starting (89 kg)" if lost > 0 else "⚖️ Starting baseline recorded."
+        progress_str = f"📉 Total Lost: *{lost} kg* from starting (89.0 kg)" if lost > 0 else "⚖️ Starting baseline recorded."
         
         msg = (
             f"⚖️ *Weight Logged Successfully: {weight_val} kg*\n\n"
-            f"🎯 *Goal:* {settings.USER_TARGET_WEIGHT_KG} kg (`{remaining_to_goal} kg` to go)\n"
+            f"🎯 *Goal:* 70.0 kg (`{remaining_to_goal} kg` to go)\n"
             f"{progress_str}\n"
             f"🔥 *Dynamic Daily Budget:* *{new_budget} kcal/day* (500 kcal deficit recalculated)\n\n"
-            f"All your dashboard metrics and calorie targets have been updated!"
+            f"✅ Web dashboard and calorie tracking limits updated!"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
     finally:
@@ -208,6 +231,26 @@ async def clear_meal_logic(target: str, update: Update):
     today = date.today()
     db = SessionLocal()
     try:
+        # Handle clear weight
+        if target == "weight":
+            w_entries = db.query(WeightLog).order_by(WeightLog.date.desc(), WeightLog.id.desc()).all()
+            if not w_entries:
+                await update.message.reply_text("ℹ️ No weight entries found to clear. Baseline remains 89.0 kg.")
+                return
+            removed_val = w_entries[0].weight_kg
+            db.delete(w_entries[0])
+            db.commit()
+
+            user_state = get_user_state(db)
+            await update.message.reply_text(
+                f"🗑️ *Cleared Weight Entry ({removed_val} kg)!*\n\n"
+                f"⚖️ Current Weight is now: *{user_state['weight']} kg*\n"
+                f"🔥 Daily Budget reset to: *{user_state['budget']} kcal/day*\n"
+                f"🎯 Remaining to 70kg: *{user_state['to_lose']} kg*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
         if target == "all":
             meals = db.query(MealLog).filter(MealLog.date == today).all()
             if not meals:
@@ -291,7 +334,8 @@ async def handle_eod(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ℹ️ No meals were logged today yet. Log at least one meal before generating your EOD report!")
             return
 
-        analysis = analyze_day_meals(meals, budget=settings.DAILY_CALORIE_BUDGET)
+        user_state = get_user_state(db)
+        analysis = analyze_day_meals(meals, budget=user_state["budget"])
         text_report = format_telegram_eod_report(today, analysis)
         pdf_path = generate_pdf_report(today, analysis)
 
@@ -414,10 +458,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.commit()
             db.refresh(meal_log)
 
-            # Compute running day totals
+            # Compute running day totals & active user state
             today_meals = db.query(MealLog).filter(MealLog.date == today).all()
             running_cals = sum(m.total_calories for m in today_meals)
-            remaining_cals = settings.DAILY_CALORIE_BUDGET - running_cals
+            user_state = get_user_state(db)
+            budget = user_state["budget"]
+            remaining_cals = budget - running_cals
         finally:
             db.close()
 
@@ -446,8 +492,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_tag = f"🟢 `{remaining_cals} kcal` remaining" if remaining_cals >= 0 else f"🔴 `+{abs(remaining_cals)} kcal` OVER"
 
         lines.append(f"\n⚡ *Meal Total:* `{total_cals} kcal` (P: {total_p}g | C: {total_c}g | F: {total_f}g)")
-        lines.append(f"📈 *Today So Far:* `{running_cals}` / *{settings.DAILY_CALORIE_BUDGET} kcal*")
-        lines.append(f"⚖️ *Status:* {status_tag}")
+        lines.append(f"📈 *Today So Far:* `{running_cals}` / *{budget} kcal*")
+        lines.append(f"⚖️ *Status:* {status_tag} (Current: {user_state['weight']} kg)")
         
         if tip:
             lines.append(f"\n💡 _{tip}_")

@@ -248,6 +248,21 @@ function setupWeightForm() {
     });
 }
 
+async function deleteWeight(weightId) {
+    if (!confirm("Are you sure you want to clear this weight entry?")) return;
+
+    try {
+        const res = await fetch(`/api/weight/${weightId}`, { method: "DELETE" });
+        if (res.ok) {
+            window.location.reload();
+        } else {
+            alert("Error clearing weight entry.");
+        }
+    } catch (err) {
+        alert("Error connecting to server.");
+    }
+}
+
 async function deleteMeal(mealId) {
     if (!confirm("Are you sure you want to delete this meal entry?")) return;
 

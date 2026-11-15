@@ -20,31 +20,44 @@ def detect_meal_reference(text: str) -> Optional[str]:
     return None
 
 def detect_weight_entry(text: str) -> Optional[float]:
-    """Detects if user is logging weight (e.g. '87kg', 'weight 87.5', 'my weight is 86.8 kg')."""
+    """Detects if user is logging weight (e.g. '87kg', 'weight 87.5', 'my weight is 86.8 kg', '87')."""
     lower = text.lower().strip()
     
-    # 1. Exact or near-exact pattern: "87kg", "87.5 kg", "87 kgs", "weight 87"
-    m1 = re.match(r"^(?:my\s+)?(?:weight|weighed|today\s+weight)?\s*:?\s*(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|kgs|kilos?)?$", lower)
-    if m1:
-        val = float(m1.group(1))
+    # Avoid false positives if food keywords exist
+    if any(k in lower for k in ["ate", "eaten", "had", "breakfast", "lunch", "dinner", "snack", "meanwhile", "rice", "roti", "dosa", "idli", "dal", "curry"]):
+        return None
+
+    # 1. Matches text containing 'kg' or 'kgs' or 'kilos' with number: e.g. "87kg", "87.5 kg", "i am 87 kg"
+    m_kg = re.search(r"(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|kgs|kilos?\b)", lower)
+    if m_kg:
+        val = float(m_kg.group(1))
         if 40.0 <= val <= 250.0:
             return round(val, 1)
 
-    # 2. Conversational: "my weight is 87kg", "weighed 87.4 today"
-    m2 = re.search(r"(?:weight|weighed|today\s+weight)\s*(?:is|was|at|:)?\s*(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|kgs)?", lower)
-    if m2:
-        val = float(m2.group(1))
+    # 2. Matches "weight", "weighed", "wt" followed by number: e.g. "weight 87", "wt: 87.5"
+    m_wt = re.search(r"(?:weight|weighed|today\s+weight|current\s+weight|wt)\s*(?:is|was|at|:)?\s*(\d{2,3}(?:\.\d{1,2})?)", lower)
+    if m_wt:
+        val = float(m_wt.group(1))
         if 40.0 <= val <= 250.0:
+            return round(val, 1)
+
+    # 3. Standalone number between 45 and 200: e.g. "87" or "87.5"
+    if re.match(r"^\d{2,3}(?:\.\d{1,2})?$", lower):
+        val = float(lower)
+        if 45.0 <= val <= 200.0:
             return round(val, 1)
 
     return None
 
 def detect_clear_meal(text: str) -> Optional[str]:
-    """Detects if user wants to clear a specific meal (e.g. 'clear breakfast', 'breakfast clear', 'clear all')."""
+    """Detects if user wants to clear a specific meal or weight (e.g. 'breakfast clear', 'clear weight', 'clear all')."""
     lower = text.lower().strip()
     
-    # 1. Matches: "clear breakfast", "delete lunch", "remove snacks", "clear all", "clear today"
-    m1 = re.search(r"^(?:/clear|clear|delete|remove|clean)\s+(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile|all|today)$", lower)
+    if lower in ["clear weight", "weight clear", "delete weight", "remove weight", "reset weight", "/clear weight"]:
+        return "weight"
+
+    # 1. Matches: "clear breakfast", "delete lunch", "remove weight", "clear all", "clear today"
+    m1 = re.search(r"^(?:/clear|clear|delete|remove|clean|reset)\s+(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile|weight|all|today)$", lower)
     if m1:
         target = m1.group(1)
         if target in ["breakfast", "tiffin", "morning"]: return "breakfast"
@@ -52,10 +65,11 @@ def detect_clear_meal(text: str) -> Optional[str]:
         if target in ["snack", "snacks"]: return "snack"
         if target in ["dinner"]: return "dinner"
         if target in ["meanwhile"]: return "meanwhile"
+        if target in ["weight"]: return "weight"
         if target in ["all", "today"]: return "all"
 
-    # 2. Matches: "breakfast clear", "lunch delete", "dinner clean"
-    m2 = re.search(r"^(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile)\s+(?:clear|delete|clean|remove)$", lower)
+    # 2. Matches: "breakfast clear", "lunch delete", "dinner clean", "weight clear"
+    m2 = re.search(r"^(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile|weight)\s+(?:clear|delete|clean|remove|reset)$", lower)
     if m2:
         target = m2.group(1)
         if target in ["breakfast", "tiffin", "morning"]: return "breakfast"
@@ -63,6 +77,7 @@ def detect_clear_meal(text: str) -> Optional[str]:
         if target in ["snack", "snacks"]: return "snack"
         if target in ["dinner"]: return "dinner"
         if target in ["meanwhile"]: return "meanwhile"
+        if target in ["weight"]: return "weight"
 
     return None
 

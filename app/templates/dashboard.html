@@ -424,6 +424,7 @@
                                     <th class="py-2.5 px-4 font-semibold">Weight</th>
                                     <th class="py-2.5 px-4 font-semibold">Total Change</th>
                                     <th class="py-2.5 px-4 font-semibold">To 70kg Goal</th>
+                                    <th class="py-2.5 px-4 font-semibold text-right">Action</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100 text-slate-700">
@@ -439,6 +440,11 @@
                                         </td>
                                         <td class="py-3 px-4 text-slate-500 font-medium">
                                             {{ (w.weight - 70.0)|round(1) }} kg remaining
+                                        </td>
+                                        <td class="py-3 px-4 text-right">
+                                            <button onclick="deleteWeight({{ w.id }})" class="text-xs text-rose-600 hover:text-rose-800 font-semibold transition">
+                                                Clear
+                                            </button>
                                         </td>
                                     </tr>
                                 {% endfor %}
