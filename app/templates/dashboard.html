@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CalorieBot // Personal Nutrition & Calorie Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased flex flex-col font-sans">
+
+    <!-- Top Navigation -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <span class="text-2xl">🔥</span>
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                        CALORIEBOT <span class="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">AI COACH</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Target: 89 kg ➔ 70 kg Cut (-19 kg)</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-4">
+                <a href="/api/report/today/pdf" target="_blank" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-3 py-2 rounded-lg border border-slate-700 transition">
+                    📄 Download Today's PDF
+                </a>
+                <span class="text-xs text-slate-400 hidden sm:inline">{{ today_str }}</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+        <!-- User Goal Banner -->
+        <div class="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div>
+                    <span class="text-xs font-semibold tracking-wider text-indigo-400 uppercase">Weight Cut Target</span>
+                    <h2 class="text-2xl font-extrabold text-white mt-1">Goal: Drop 19 kg (89 kg ➔ 70 kg)</h2>
+                    <p class="text-xs text-slate-400 mt-1">Male, 21 y/o • Height: 168 cm • Daily Deficit: ~500 kcal • Safe Target: 1,750 kcal/day</p>
+                </div>
+                <div class="w-full md:w-80 space-y-2">
+                    <div class="flex justify-between text-xs font-medium">
+                        <span class="text-slate-400">Progress to 70 kg</span>
+                        <span class="text-emerald-400 font-bold">In Progress</span>
+                    </div>
+                    <div class="h-3 w-full bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                        <div class="h-full bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-full" style="width: 25%"></div>
+                    </div>
+                    <div class="flex justify-between text-[11px] text-slate-500">
+                        <span>Current: 89 kg</span>
+                        <span>Target: 70 kg</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Cards Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <!-- Calorie Budget -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow">
+                <span class="text-xs text-slate-400 font-medium">Daily Calorie Target</span>
+                <div class="mt-2 flex items-baseline justify-between">
+                    <span class="text-3xl font-black text-white">{{ settings.DAILY_CALORIE_BUDGET }}</span>
+                    <span class="text-xs text-slate-500">kcal / day</span>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">BMR: 1,840 kcal + light activity</p>
+            </div>
+
+            <!-- Consumed Today -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow">
+                <span class="text-xs text-slate-400 font-medium">Consumed Today</span>
+                <div class="mt-2 flex items-baseline justify-between">
+                    <span class="text-3xl font-black text-amber-400" id="consumedTotal">{{ analysis.total_calories }}</span>
+                    <span class="text-xs text-slate-500">kcal</span>
+                </div>
+                <div class="mt-2 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div id="consumedBar" class="h-full bg-amber-400 transition-all duration-500" 
+                         style="width: {{ [100, (analysis.total_calories / settings.DAILY_CALORIE_BUDGET * 100)|round]|min }}%"></div>
+                </div>
+            </div>
+
+            <!-- Net Balance -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow">
+                <span class="text-xs text-slate-400 font-medium">Remaining / Status</span>
+                <div class="mt-2 flex items-baseline justify-between">
+                    {% if analysis.is_excess %}
+                        <span class="text-3xl font-black text-rose-500">+{{ analysis.excess_calories }}</span>
+                        <span class="text-xs text-rose-400 font-semibold uppercase">Over Budget</span>
+                    {% else %}
+                        <span class="text-3xl font-black text-emerald-400">{{ analysis.remaining_calories }}</span>
+                        <span class="text-xs text-emerald-400 font-semibold uppercase">Remaining</span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-slate-500 mt-2">
+                    {% if analysis.is_excess %}
+                        Limit late-night snacking!
+                    {% else %}
+                        Great control! On track for 70 kg.
+                    {% endif %}
+                </p>
+            </div>
+
+            <!-- Protein Tracker -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow">
+                <span class="text-xs text-slate-400 font-medium">Protein Intake</span>
+                <div class="mt-2 flex items-baseline justify-between">
+                    <span class="text-3xl font-black text-indigo-400">{{ analysis.total_protein|int }}g</span>
+                    <span class="text-xs text-slate-500">/ {{ settings.DAILY_PROTEIN_TARGET_G }}g goal</span>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">Protects muscle during fat cut</p>
+            </div>
+        </div>
+
+        <!-- Quick Log Bar (Log from Browser) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow">
+            <h3 class="text-sm font-semibold text-slate-200 mb-2 flex items-center gap-2">
+                <span>💬</span> Quick Log Meal (or send via Telegram Bot!)
+            </h3>
+            <p class="text-xs text-slate-400 mb-4">
+                Type naturally, e.g. <span class="text-indigo-400 font-mono">"for breakfast 2 dosas and sambar"</span>, <span class="text-indigo-400 font-mono">"for lunch 1 bowl rice, dal and chicken"</span>, or <span class="text-indigo-400 font-mono">"meanwhile 1 apple"</span>.
+            </p>
+            <form id="quickLogForm" class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="mealInput" required placeholder="Type what you ate..." 
+                       class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition">
+                <button type="submit" id="logBtn" 
+                        class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm px-6 py-3 rounded-xl transition flex items-center justify-center gap-2 whitespace-nowrap">
+                    <span>⚡ Log Meal</span>
+                </button>
+            </form>
+            <div id="logFeedback" class="hidden mt-3 p-3 rounded-lg text-xs"></div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Meal Breakdown Donut Chart -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow flex flex-col">
+                <h3 class="text-sm font-semibold text-slate-200 mb-4 flex items-center justify-between">
+                    <span>🍽️ Today's Calories by Meal</span>
+                    <span class="text-xs text-slate-500 font-normal">Breakfast • Lunch • Snacks • Dinner • Meanwhile</span>
+                </h3>
+                <div class="flex-1 relative flex items-center justify-center min-h-[260px]">
+                    <canvas id="mealCategoryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 7-Day Calorie History Chart -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow flex flex-col">
+                <h3 class="text-sm font-semibold text-slate-200 mb-4 flex items-center justify-between">
+                    <span>📈 7-Day Intake vs 1,750 kcal Budget</span>
+                    <span class="text-xs text-emerald-400 font-normal">Target line active</span>
+                </h3>
+                <div class="flex-1 relative flex items-center justify-center min-h-[260px]">
+                    <canvas id="historyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dietitian EOD Audit Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xl">🩺</span>
+                    <h3 class="text-base font-bold text-white">Daily Dietitian Audit & Control Plan</h3>
+                </div>
+                <a href="/api/report/today/pdf" target="_blank" class="text-xs bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600/30 px-3 py-1.5 rounded-lg transition font-medium">
+                    Download Full PDF Report
+                </a>
+            </div>
+
+            <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-5 space-y-2">
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">What To Control & Fix Tomorrow</h4>
+                <ul class="space-y-2 text-sm text-slate-300">
+                    {% for pt in analysis.control_points %}
+                        <li class="flex items-start gap-2">
+                            <span class="text-indigo-400 font-bold">•</span>
+                            <span>{{ pt }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <!-- Today's Logged Meals Timeline -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow">
+            <h3 class="text-base font-bold text-white mb-4 flex items-center justify-between">
+                <span>📋 Today's Meals Timeline</span>
+                <span class="text-xs text-slate-400">{{ meals|length }} entries logged</span>
+            </h3>
+
+            {% if not meals %}
+                <div class="text-center py-12 text-slate-500 text-sm">
+                    No meals logged yet today. Use the box above or send a message via Telegram!
+                </div>
+            {% else %}
+                <div class="divide-y divide-slate-800">
+                    {% for meal in meals %}
+                        <div class="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-bold uppercase px-2.5 py-0.5 rounded-full
+                                        {% if meal.meal_type == 'breakfast' %} bg-amber-500/20 text-amber-400 border border-amber-500/30
+                                        {% elif meal.meal_type == 'lunch' %} bg-blue-500/20 text-blue-400 border border-blue-500/30
+                                        {% elif meal.meal_type == 'snack' %} bg-purple-500/20 text-purple-400 border border-purple-500/30
+                                        {% elif meal.meal_type == 'dinner' %} bg-indigo-500/20 text-indigo-400 border border-indigo-500/30
+                                        {% else %} bg-slate-500/20 text-slate-400 border border-slate-500/30 {% endif %}">
+                                        {{ meal.meal_type }}
+                                    </span>
+                                    <span class="text-xs text-slate-500">{{ meal.created_at }}</span>
+                                </div>
+                                <p class="text-sm font-medium text-slate-200 italic">"{{ meal.raw_text }}"</p>
+                                <div class="flex flex-wrap gap-2 pt-1">
+                                    {% for item in meal.food_items %}
+                                        <span class="text-xs bg-slate-950 border border-slate-800 px-2 py-0.5 rounded text-slate-400">
+                                            {{ item.name }} ({{ item.quantity }} {{ item.unit }}) — <b class="text-slate-200">{{ item.calories }} kcal</b>
+                                        </span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-4 sm:flex-col sm:items-end justify-between">
+                                <div class="text-right">
+                                    <span class="text-lg font-black text-amber-400">{{ meal.total_calories }}</span>
+                                    <span class="text-xs text-slate-500">kcal</span>
+                                    <p class="text-[11px] text-slate-500">P: {{ meal.total_protein }}g | C: {{ meal.total_carbs }}g | F: {{ meal.total_fat }}g</p>
+                                </div>
+                                <button onclick="deleteMeal({{ meal.id }})" class="text-xs text-rose-400 hover:text-rose-300 transition">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800 bg-slate-950 py-6 text-center text-xs text-slate-500">
+        CalorieBot • Automated Nutrition & Calorie Tracking System • Powered by Google Gemini AI & Telegram
+    </footer>
+
+    <!-- Pass backend data to JS -->
+    <script>
+        const initialCategoryData = {
+            breakfast: {{ analysis.by_category.breakfast|map(attribute='calories')|sum }},
+            lunch: {{ analysis.by_category.lunch|map(attribute='calories')|sum }},
+            snack: {{ analysis.by_category.snack|map(attribute='calories')|sum }},
+            dinner: {{ analysis.by_category.dinner|map(attribute='calories')|sum }},
+            meanwhile: {{ analysis.by_category.meanwhile|map(attribute='calories')|sum }}
+        };
+        const dailyBudget = {{ settings.DAILY_CALORIE_BUDGET }};
+    </script>
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

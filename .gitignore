@@ -1,0 +1,24 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets & Environment variables
+.env
+
+# Database & generated data
+data/*.db
+data/reports/*
+!data/reports/.gitkeep
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
