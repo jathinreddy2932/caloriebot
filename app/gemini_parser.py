@@ -19,6 +19,26 @@ def detect_meal_reference(text: str) -> Optional[str]:
             return "dinner"
     return None
 
+def detect_weight_entry(text: str) -> Optional[float]:
+    """Detects if user is logging weight (e.g. '87kg', 'weight 87.5', 'my weight is 86.8 kg')."""
+    lower = text.lower().strip()
+    
+    # 1. Exact or near-exact pattern: "87kg", "87.5 kg", "87 kgs", "weight 87"
+    m1 = re.match(r"^(?:my\s+)?(?:weight|weighed|today\s+weight)?\s*:?\s*(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|kgs|kilos?)?$", lower)
+    if m1:
+        val = float(m1.group(1))
+        if 40.0 <= val <= 250.0:
+            return round(val, 1)
+
+    # 2. Conversational: "my weight is 87kg", "weighed 87.4 today"
+    m2 = re.search(r"(?:weight|weighed|today\s+weight)\s*(?:is|was|at|:)?\s*(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|kgs)?", lower)
+    if m2:
+        val = float(m2.group(1))
+        if 40.0 <= val <= 250.0:
+            return round(val, 1)
+
+    return None
+
 def detect_clear_meal(text: str) -> Optional[str]:
     """Detects if user wants to clear a specific meal (e.g. 'clear breakfast', 'breakfast clear', 'clear all')."""
     lower = text.lower().strip()

@@ -12,14 +12,15 @@ from telegram.ext import (
     filters,
 )
 
-from app.config import settings
+from app.config import settings, calculate_budget_for_weight
 from app.database import SessionLocal
-from app.models import MealLog, DailyReport
+from app.models import MealLog, DailyReport, WeightLog
 from app.gemini_parser import (
     parse_food_with_gemini,
     detect_meal_reference,
     extract_meal_type_heuristic,
     detect_clear_meal,
+    detect_weight_entry,
 )
 from app.report_generator import (
     analyze_day_meals,
@@ -130,6 +131,76 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Your daily total has been recalculated.",
             parse_mode=ParseMode.MARKDOWN
         )
+    finally:
+        db.close()
+
+async def log_weight_logic(weight_val: float, update: Update):
+    today = date.today()
+    db = SessionLocal()
+    try:
+        w_entry = WeightLog(date=today, weight_kg=weight_val)
+        db.add(w_entry)
+        db.commit()
+
+        new_budget = calculate_budget_for_weight(weight_val, settings.USER_HEIGHT_CM, settings.USER_AGE, settings.USER_GENDER)
+        lost = round(settings.USER_CURRENT_WEIGHT_KG - weight_val, 1)
+        remaining_to_goal = round(max(0.0, weight_val - settings.USER_TARGET_WEIGHT_KG), 1)
+
+        progress_str = f"📉 Total Lost: *{lost} kg* from starting (89 kg)" if lost > 0 else "⚖️ Starting baseline recorded."
+        
+        msg = (
+            f"⚖️ *Weight Logged Successfully: {weight_val} kg*\n\n"
+            f"🎯 *Goal:* {settings.USER_TARGET_WEIGHT_KG} kg (`{remaining_to_goal} kg` to go)\n"
+            f"{progress_str}\n"
+            f"🔥 *Dynamic Daily Budget:* *{new_budget} kcal/day* (500 kcal deficit recalculated)\n\n"
+            f"All your dashboard metrics and calorie targets have been updated!"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    finally:
+        db.close()
+
+async def weight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("ℹ️ *Usage:* `/weight 87.5` or simply type `87kg` in chat.", parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        val = float(args[0].replace("kg", "").strip())
+        await log_weight_logic(val, update)
+    except ValueError:
+        await update.message.reply_text("⚠️ Please provide a valid weight number, e.g. `/weight 87.5`")
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from datetime import timedelta
+    today = date.today()
+    start_date = today - timedelta(days=6)
+    db = SessionLocal()
+    try:
+        meals = db.query(MealLog).filter(MealLog.date >= start_date).order_by(MealLog.date.desc(), MealLog.created_at.asc()).all()
+        if not meals:
+            await update.message.reply_text("ℹ️ No meal history found for the last 7 days yet.")
+            return
+
+        by_day = {}
+        for m in meals:
+            d_str = m.date.strftime("%a %d %b")
+            if d_str not in by_day:
+                by_day[d_str] = []
+            by_day[d_str].append(m)
+
+        lines = ["📅 *Past 7 Days Food & Calorie History:*\n"]
+        for d_str, day_meals in by_day.items():
+            tot = sum(m.total_calories for m in day_meals)
+            status_emoji = "🟢" if tot <= settings.DAILY_CALORIE_BUDGET else "🔴"
+            lines.append(f"{status_emoji} *{d_str}* — `{tot} kcal` ({len(day_meals)} meals)")
+            for m in day_meals[:3]:
+                lines.append(f"   • {m.meal_type.capitalize()}: {m.total_calories} kcal ({m.raw_text[:30]})")
+            if len(day_meals) > 3:
+                lines.append(f"   • ... +{len(day_meals)-3} more")
+            lines.append("")
+
+        lines.append(f"🌐 View full itemized history on your dashboard: `http://localhost:{settings.PORT}/dashboard`")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     finally:
         db.close()
 
@@ -274,6 +345,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_command(update, context)
         return
 
+    # Check if user logged weight (e.g. '87kg', 'weight 87.5', '86.8')
+    weight_val = detect_weight_entry(text)
+    if weight_val:
+        await log_weight_logic(weight_val, update)
+        return
+
     # User logged food! Send quick typing action
     await update.effective_chat.send_action("typing")
 
@@ -393,6 +470,8 @@ def create_bot_app() -> Application:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("weight", weight_command))
+    app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))

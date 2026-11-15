@@ -43,3 +43,10 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+
+def calculate_budget_for_weight(weight_kg: float, height_cm: float = 168.0, age: int = 21, gender: str = "male") -> int:
+    """Mifflin-St Jeor daily calorie budget with 500 kcal safe deficit."""
+    bmr = (10.0 * weight_kg) + (6.25 * height_cm) - (5.0 * age) + (5 if gender == "male" else -161)
+    maintenance = bmr * 1.2
+    deficit_budget = int(maintenance - 500)
+    return max(1500, min(2400, deficit_budget))

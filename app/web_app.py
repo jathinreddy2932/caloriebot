@@ -10,10 +10,15 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.config import settings, BASE_DIR
+from app.config import settings, BASE_DIR, calculate_budget_for_weight
 from app.database import get_db, init_db
 from app.models import MealLog, DailyReport, WeightLog
-from app.gemini_parser import parse_food_with_gemini, detect_meal_reference, extract_meal_type_heuristic
+from app.gemini_parser import (
+    parse_food_with_gemini,
+    detect_meal_reference,
+    extract_meal_type_heuristic,
+    detect_weight_entry,
+)
 from app.report_generator import analyze_day_meals, generate_pdf_report
 
 logger = logging.getLogger(__name__)
@@ -33,24 +38,83 @@ templates = Jinja2Templates(directory=str(templates_dir))
 def startup_event():
     init_db()
 
+def get_user_stats(db: Session):
+    latest_weight = db.query(WeightLog).order_by(WeightLog.date.desc(), WeightLog.id.desc()).first()
+    curr_weight = latest_weight.weight_kg if latest_weight else settings.USER_CURRENT_WEIGHT_KG
+    budget = calculate_budget_for_weight(curr_weight, settings.USER_HEIGHT_CM, settings.USER_AGE, settings.USER_GENDER)
+    to_lose = round(max(0.0, curr_weight - settings.USER_TARGET_WEIGHT_KG), 1)
+    lost_so_far = round(max(0.0, settings.USER_CURRENT_WEIGHT_KG - curr_weight), 1)
+    return {
+        "current_weight": curr_weight,
+        "starting_weight": settings.USER_CURRENT_WEIGHT_KG,
+        "target_weight": settings.USER_TARGET_WEIGHT_KG,
+        "to_lose": to_lose,
+        "lost_so_far": lost_so_far,
+        "budget": budget,
+    }
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_view(request: Request, db: Session = Depends(get_db)):
     today = date.today()
+    stats = get_user_stats(db)
     meals = db.query(MealLog).filter(MealLog.date == today).order_by(MealLog.created_at.desc()).all()
-    analysis = analyze_day_meals(meals, budget=settings.DAILY_CALORIE_BUDGET)
-    
+    analysis = analyze_day_meals(meals, budget=stats["budget"])
+
+    # Build 14-day history records for the History tab
+    history_days = []
+    for i in range(14):
+        d = today - timedelta(days=i)
+        d_meals = db.query(MealLog).filter(MealLog.date == d).order_by(MealLog.created_at.asc()).all()
+        if d_meals:
+            tot_cals = sum(m.total_calories for m in d_meals)
+            tot_p = sum(m.total_protein for m in d_meals)
+            tot_c = sum(m.total_carbs for m in d_meals)
+            tot_f = sum(m.total_fat for m in d_meals)
+            history_days.append({
+                "date": d.isoformat(),
+                "date_display": d.strftime("%A, %b %d"),
+                "total_calories": tot_cals,
+                "budget": stats["budget"],
+                "is_excess": tot_cals > stats["budget"],
+                "diff": abs(tot_cals - stats["budget"]),
+                "protein": round(tot_p, 1),
+                "carbs": round(tot_c, 1),
+                "fat": round(tot_f, 1),
+                "meals_count": len(d_meals),
+                "meals": [m.to_dict() for m in d_meals]
+            })
+
+    # Weight history for chart & table
+    weight_logs = db.query(WeightLog).order_by(WeightLog.date.asc()).all()
+    weights_data = [{"date": w.date.strftime("%b %d"), "weight": w.weight_kg} for w in weight_logs]
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
             "settings": settings,
+            "user_stats": stats,
             "today_str": today.strftime("%A, %B %d, %Y"),
             "meals": [m.to_dict() for m in meals],
             "analysis": analysis,
-            "target_deficit": 89.0 - 70.0,
+            "history_days": history_days,
+            "weights_data": weights_data,
         }
     )
+
+class WeightInput(BaseModel):
+    weight_kg: float
+
+@app.post("/api/weight")
+async def log_weight_api(data: WeightInput, db: Session = Depends(get_db)):
+    if data.weight_kg < 40 or data.weight_kg > 250:
+        raise HTTPException(status_code=400, detail="Invalid weight value.")
+    w_entry = WeightLog(date=date.today(), weight_kg=round(data.weight_kg, 1))
+    db.add(w_entry)
+    db.commit()
+    stats = get_user_stats(db)
+    return {"status": "success", "weight": w_entry.weight_kg, "stats": stats}
 
 class ManualMealInput(BaseModel):
     text: str
