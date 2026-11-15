@@ -1,4 +1,4 @@
-// CareAscendium Style Dashboard Logic
+// CalorieBot Dashboard Logic - By Jathin
 let categoryChart = null;
 let historyChart = null;
 
@@ -46,7 +46,7 @@ function initCategoryChart() {
                 backgroundColor: [
                     "#f59e0b", // Amber
                     "#0d2a5c", // Deep Navy
-                    "#63a821", // CareAscendium Green
+                    "#63a821", // Brand Green
                     "#153c7f", // Royal Blue
                     "#ec4899"  // Pink
                 ],
