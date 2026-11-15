@@ -19,6 +19,33 @@ def detect_meal_reference(text: str) -> Optional[str]:
             return "dinner"
     return None
 
+def detect_clear_meal(text: str) -> Optional[str]:
+    """Detects if user wants to clear a specific meal (e.g. 'clear breakfast', 'breakfast clear', 'clear all')."""
+    lower = text.lower().strip()
+    
+    # 1. Matches: "clear breakfast", "delete lunch", "remove snacks", "clear all", "clear today"
+    m1 = re.search(r"^(?:/clear|clear|delete|remove|clean)\s+(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile|all|today)$", lower)
+    if m1:
+        target = m1.group(1)
+        if target in ["breakfast", "tiffin", "morning"]: return "breakfast"
+        if target in ["lunch"]: return "lunch"
+        if target in ["snack", "snacks"]: return "snack"
+        if target in ["dinner"]: return "dinner"
+        if target in ["meanwhile"]: return "meanwhile"
+        if target in ["all", "today"]: return "all"
+
+    # 2. Matches: "breakfast clear", "lunch delete", "dinner clean"
+    m2 = re.search(r"^(breakfast|lunch|tiffin|morning|snack|snacks|dinner|meanwhile)\s+(?:clear|delete|clean|remove)$", lower)
+    if m2:
+        target = m2.group(1)
+        if target in ["breakfast", "tiffin", "morning"]: return "breakfast"
+        if target in ["lunch"]: return "lunch"
+        if target in ["snack", "snacks"]: return "snack"
+        if target in ["dinner"]: return "dinner"
+        if target in ["meanwhile"]: return "meanwhile"
+
+    return None
+
 def extract_meal_type_heuristic(text: str) -> str:
     lower = text.lower()
     if any(k in lower for k in ["morning", "breakfast", "tiffin", "nashta", "bfast", "break fast"]):

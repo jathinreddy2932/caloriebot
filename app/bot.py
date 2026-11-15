@@ -15,7 +15,12 @@ from telegram.ext import (
 from app.config import settings
 from app.database import SessionLocal
 from app.models import MealLog, DailyReport
-from app.gemini_parser import parse_food_with_gemini, detect_meal_reference, extract_meal_type_heuristic
+from app.gemini_parser import (
+    parse_food_with_gemini,
+    detect_meal_reference,
+    extract_meal_type_heuristic,
+    detect_clear_meal,
+)
 from app.report_generator import (
     analyze_day_meals,
     format_telegram_eod_report,
@@ -128,6 +133,73 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
+async def clear_meal_logic(target: str, update: Update):
+    today = date.today()
+    db = SessionLocal()
+    try:
+        if target == "all":
+            meals = db.query(MealLog).filter(MealLog.date == today).all()
+            if not meals:
+                await update.message.reply_text("ℹ️ No meals logged today to clear.")
+                return
+            count = len(meals)
+            cals = sum(m.total_calories for m in meals)
+            for m in meals:
+                db.delete(m)
+            db.commit()
+            await update.message.reply_text(
+                f"🗑️ *Cleared all meals for today!* ({count} entries, -{cals} kcal).\n"
+                f"Remaining budget: *{settings.DAILY_CALORIE_BUDGET} kcal*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        meals = db.query(MealLog).filter(MealLog.date == today, MealLog.meal_type == target).all()
+        if not meals:
+            await update.message.reply_text(
+                f"ℹ️ No meals found under *{target.capitalize()}* today to clear.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        cals = sum(m.total_calories for m in meals)
+        for m in meals:
+            db.delete(m)
+        db.commit()
+
+        # Recalculate remaining
+        remaining_meals = db.query(MealLog).filter(MealLog.date == today).all()
+        new_total = sum(m.total_calories for m in remaining_meals)
+        rem = settings.DAILY_CALORIE_BUDGET - new_total
+        status_tag = f"🟢 `{rem} kcal` remaining" if rem >= 0 else f"🔴 `+{abs(rem)} kcal` OVER"
+
+        await update.message.reply_text(
+            f"🗑️ *Cleared {target.capitalize()}!* (-{cals} kcal removed)\n\n"
+            f"📈 *New Today's Total:* `{new_total}` / *{settings.DAILY_CALORIE_BUDGET} kcal*\n"
+            f"⚖️ *Status:* {status_tag}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    finally:
+        db.close()
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "ℹ️ *How to clear a meal:*\n"
+            "• `/clear breakfast` (or simply type `breakfast clear`)\n"
+            "• `/clear lunch` (or type `lunch clear`)\n"
+            "• `/clear snacks` (or type `snacks clear`)\n"
+            "• `/clear dinner` (or type `dinner clear`)\n"
+            "• `/clear all` (clears entire day)",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    arg = args[0].lower()
+    target = detect_clear_meal(f"clear {arg}") or arg
+    await clear_meal_logic(target, update)
+
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # In local testing it's localhost:8000, in production it would be domain
     msg = (
@@ -189,6 +261,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if user sent EOD
     if text.upper() in ["EOD", "/EOD", "END OF DAY", "DONE FOR TODAY"]:
         await handle_eod(update, context)
+        return
+
+    # Check if user asked to clear a meal (e.g. 'breakfast clear', 'clear breakfast', 'clear lunch')
+    clear_target = detect_clear_meal(text)
+    if clear_target:
+        await clear_meal_logic(clear_target, update)
         return
 
     # Check if user asked status
@@ -315,6 +393,7 @@ def create_bot_app() -> Application:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))
     app.add_handler(CommandHandler("eod", handle_eod))
