@@ -15,7 +15,7 @@ from telegram.ext import (
 from app.config import settings
 from app.database import SessionLocal
 from app.models import MealLog, DailyReport
-from app.gemini_parser import parse_food_with_gemini
+from app.gemini_parser import parse_food_with_gemini, detect_meal_reference, extract_meal_type_heuristic
 from app.report_generator import (
     analyze_day_meals,
     format_telegram_eod_report,
@@ -200,17 +200,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_action("typing")
 
     try:
-        parsed = parse_food_with_gemini(text)
-        
-        meal_type = parsed.get("meal_type", "other")
-        items = parsed.get("items", [])
-        total_cals = parsed.get("total_calories", 0)
-        total_p = parsed.get("total_protein", 0.0)
-        total_c = parsed.get("total_carbs", 0.0)
-        total_f = parsed.get("total_fat", 0.0)
-        tip = parsed.get("short_tip", "")
-
         today = date.today()
+        ref_meal_type = detect_meal_reference(text)
+        
+        if ref_meal_type:
+            db = SessionLocal()
+            try:
+                prev_meal = (
+                    db.query(MealLog)
+                    .filter(MealLog.date == today, MealLog.meal_type == ref_meal_type)
+                    .order_by(MealLog.id.desc())
+                    .first()
+                )
+                if not prev_meal:
+                    await update.message.reply_text(
+                        f"⚠️ I couldn't find a logged *{ref_meal_type.capitalize()}* today to copy from!\n"
+                        f"Please tell me what you ate for {extract_meal_type_heuristic(text)}.",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    return
+
+                target_meal_type = extract_meal_type_heuristic(text)
+                if target_meal_type == "other":
+                    target_meal_type = "dinner" if ref_meal_type == "lunch" else "lunch"
+
+                items = json.loads(prev_meal.items_json) if prev_meal.items_json else []
+                total_cals = prev_meal.total_calories
+                total_p = prev_meal.total_protein
+                total_c = prev_meal.total_carbs
+                total_f = prev_meal.total_fat
+                tip = f"Copied accurately from your {ref_meal_type.capitalize()}."
+                meal_type = target_meal_type
+            finally:
+                db.close()
+        else:
+            parsed = parse_food_with_gemini(text)
+            meal_type = parsed.get("meal_type", "other")
+            items = parsed.get("items", [])
+            total_cals = parsed.get("total_calories", 0)
+            total_p = parsed.get("total_protein", 0.0)
+            total_c = parsed.get("total_carbs", 0.0)
+            total_f = parsed.get("total_fat", 0.0)
+            tip = parsed.get("short_tip", "")
+
         db = SessionLocal()
         try:
             meal_log = MealLog(

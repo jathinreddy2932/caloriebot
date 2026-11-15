@@ -1,7 +1,23 @@
 import json
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.config import settings
+
+def detect_meal_reference(text: str) -> Optional[str]:
+    """Detects if user is referencing another meal (e.g. 'same as lunch', 'repeat breakfast')."""
+    lower = text.lower()
+    match = re.search(r"(?:same\s+(?:as|like)|repeat|ditto|copy\s+of)\s+(breakfast|lunch|tiffin|morning|snack|snacks|dinner)", lower)
+    if match:
+        ref = match.group(1)
+        if ref in ["breakfast", "tiffin", "morning"]:
+            return "breakfast"
+        if ref in ["lunch"]:
+            return "lunch"
+        if ref in ["snack", "snacks"]:
+            return "snack"
+        if ref in ["dinner"]:
+            return "dinner"
+    return None
 
 def extract_meal_type_heuristic(text: str) -> str:
     lower = text.lower()

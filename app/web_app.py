@@ -13,7 +13,7 @@ from sqlalchemy import func
 from app.config import settings, BASE_DIR
 from app.database import get_db, init_db
 from app.models import MealLog, DailyReport, WeightLog
-from app.gemini_parser import parse_food_with_gemini
+from app.gemini_parser import parse_food_with_gemini, detect_meal_reference, extract_meal_type_heuristic
 from app.report_generator import analyze_day_meals, generate_pdf_report
 
 logger = logging.getLogger(__name__)
@@ -61,24 +61,53 @@ async def log_meal_api(data: ManualMealInput, db: Session = Depends(get_db)):
     if not text:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
         
-    parsed = parse_food_with_gemini(text)
     today = date.today()
-    
-    meal_log = MealLog(
-        date=today,
-        meal_type=parsed.get("meal_type", "other"),
-        raw_text=text,
-        items_json=json.dumps(parsed.get("items", [])),
-        total_calories=parsed.get("total_calories", 0),
-        total_protein=parsed.get("total_protein", 0.0),
-        total_carbs=parsed.get("total_carbs", 0.0),
-        total_fat=parsed.get("total_fat", 0.0),
-    )
+    ref_meal_type = detect_meal_reference(text)
+
+    if ref_meal_type:
+        prev_meal = (
+            db.query(MealLog)
+            .filter(MealLog.date == today, MealLog.meal_type == ref_meal_type)
+            .order_by(MealLog.id.desc())
+            .first()
+        )
+        if not prev_meal:
+            raise HTTPException(status_code=400, detail=f"No {ref_meal_type} logged today to copy from.")
+        
+        target_meal_type = extract_meal_type_heuristic(text)
+        if target_meal_type == "other":
+            target_meal_type = "dinner" if ref_meal_type == "lunch" else "lunch"
+
+        meal_log = MealLog(
+            date=today,
+            meal_type=target_meal_type,
+            raw_text=text,
+            items_json=prev_meal.items_json,
+            total_calories=prev_meal.total_calories,
+            total_protein=prev_meal.total_protein,
+            total_carbs=prev_meal.total_carbs,
+            total_fat=prev_meal.total_fat,
+        )
+        tip = f"Repeated from your {ref_meal_type.capitalize()}."
+    else:
+        parsed = parse_food_with_gemini(text)
+        meal_log = MealLog(
+            date=today,
+            meal_type=parsed.get("meal_type", "other"),
+            raw_text=text,
+            items_json=json.dumps(parsed.get("items", [])),
+            total_calories=parsed.get("total_calories", 0),
+            total_protein=parsed.get("total_protein", 0.0),
+            total_carbs=parsed.get("total_carbs", 0.0),
+            total_fat=parsed.get("total_fat", 0.0),
+        )
+        tip = parsed.get("short_tip", "")
+
     db.add(meal_log)
     db.commit()
     db.refresh(meal_log)
     
-    return {"status": "success", "meal": meal_log.to_dict(), "tip": parsed.get("short_tip", "")}
+    return {"status": "success", "meal": meal_log.to_dict(), "tip": tip}
 
 @app.delete("/api/meals/{meal_id}")
 async def delete_meal_api(meal_id: int, db: Session = Depends(get_db)):
